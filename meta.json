@@ -1,0 +1,30 @@
+{
+  "$schema": "https://dl.viam.dev/module.schema.json",
+  "module_id": "olivia-org:audio-mod-poc",
+  "visibility": "private",
+  "url": "",
+  "description": "Modular sensor component: audioin",
+  "models": [
+    {
+      "api": "olivia:component:audio",
+      "model": "olivia-org:audio-mod-poc:audioin",
+      "short_description": "Provide a short (100 characters or less) description of this model here",
+      "markdown_link": "README.md#model-olivia-orgaudio-mod-pocaudioin"
+    }
+  ],
+  "applications": null,
+  "markdown_link": "README.md",
+  "entrypoint": "bin/audio-mod-poc",
+  "first_run": "",
+  "build": {
+    "build": "make module.tar.gz",
+    "setup": "make setup",
+    "path": "module.tar.gz",
+    "arch": [
+      "linux/amd64",
+      "linux/arm64",
+      "darwin/arm64",
+      "windows/amd64"
+    ]
+  }
+}
