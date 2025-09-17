@@ -374,20 +374,20 @@ func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.F
 	switch format {
 	case pb.FileFormat_PCM16:
 		// Convert int16 PCM data to float32 for PortAudio
-		int16Data := make([]int16, len(audio)/2)
-		err := binary.Read(bytes.NewReader(audio), binary.LittleEndian, &int16Data)
+		audioSamples := make([]int16, len(audio)/2)
+		err := binary.Read(bytes.NewReader(audio), binary.LittleEndian, &audioSamples)
 		if err != nil {
 			return fmt.Errorf("could not convert to int16 array: %w", err)
 		}
 
-		// Convert int16 to float32
-		audioSamples := make([]float32, len(int16Data))
-		for i, sample := range int16Data {
-			audioSamples[i] = float32(sample) / 32768.0
-		}
+		// // Convert int16 to float32
+		// audioSamples := make([]float32, len(int16Data))
+		// for i, sample := range int16Data {
+		// 	audioSamples[i] = float32(sample) / 32768.0
+		// }
 
 		framesPerBuffer := 1024
-		outputBuffer := make([]float32, framesPerBuffer*channels)
+		outputBuffer := make([]int16, framesPerBuffer*channels)
 
 		// Open output stream
 		stream, err := portaudio.OpenDefaultStream(
@@ -429,6 +429,8 @@ func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.F
 			if err := stream.Write(); err != nil {
 				return fmt.Errorf("failed to write stream: %w", err)
 			}
+
+			fmt.Println("successfully wrote data")
 		}
 
 		if err := stream.Stop(); err != nil {
