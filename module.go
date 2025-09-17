@@ -423,7 +423,13 @@ func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.F
 				end = totalSamples
 			}
 
-			copy(outputBuffer[:end-offset], audioSamples[offset:end])
+			n := copy(outputBuffer[:end-offset], audioSamples[offset:end])
+			if n < samplesPerBuffer {
+				// pad with zeros
+				for i := n; i < samplesPerBuffer; i++ {
+					outputBuffer[i] = 0
+				}
+			}
 
 			// Write buffer to stream
 			if err := stream.Write(); err != nil {
