@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	audioapi "github.com/oliviamiller/audioapi-poc"
 	pb "github.com/oliviamiller/audioapi-poc/api/api/audio"
@@ -373,21 +374,15 @@ func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.F
 
 	switch format {
 	case pb.FileFormat_PCM16:
-		// Convert int16 PCM data to float32 for PortAudio
-		int16Data := make([]int16, len(audio)/2)
-		err := binary.Read(bytes.NewReader(audio), binary.LittleEndian, &int16Data)
+		// Convert bytes to int16 samples
+		audioSamples := make([]int16, len(audio)/2)
+		err := binary.Read(bytes.NewReader(audio), binary.LittleEndian, &audioSamples)
 		if err != nil {
 			return fmt.Errorf("could not convert to int16 array: %w", err)
 		}
 
-		// Convert int16 to float32
-		audioSamples := make([]float32, len(int16Data))
-		for i, sample := range int16Data {
-			audioSamples[i] = float32(sample) / 32768.0
-		}
-
-		framesPerBuffer := 1024
-		outputBuffer := make([]float32, framesPerBuffer*channels)
+		framesPerBuffer := 4096
+		outputBuffer := make([]int16, framesPerBuffer*channels)
 
 		// Open output stream
 		stream, err := portaudio.OpenDefaultStream(
@@ -411,6 +406,9 @@ func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.F
 		totalSamples := len(audioSamples)
 		samplesPerBuffer := framesPerBuffer * channels
 
+		// Calculate timing for each buffer to prevent underflow
+		bufferDuration := time.Duration(float64(framesPerBuffer)/float64(sampleRate)*1000) * time.Millisecond
+
 		for offset := 0; offset < totalSamples; offset += samplesPerBuffer {
 			// Clear the buffer
 			for i := range outputBuffer {
@@ -429,6 +427,9 @@ func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.F
 			if err := stream.Write(); err != nil {
 				return fmt.Errorf("failed to write stream: %w", err)
 			}
+
+			// Small delay to prevent underflow (slightly less than buffer duration)
+			time.Sleep(bufferDuration * 8 / 10)
 		}
 
 		if err := stream.Stop(); err != nil {
