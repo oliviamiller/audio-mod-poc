@@ -13,6 +13,8 @@ require (
 
 replace github.com/oliviamiller/audioapi-poc => ../audiopoc
 
+replace github.com/viamrobotics/rdk => ../rdk
+
 require github.com/pion/webrtc/v4 v4.1.4 // indirect
 
 require (

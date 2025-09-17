@@ -1,6 +1,7 @@
 package audiomodpoc
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"os"
 
 	audioapi "github.com/oliviamiller/audioapi-poc"
+	pb "github.com/oliviamiller/audioapi-poc/api/api/audio"
 
 	"github.com/gordonklaus/portaudio"
 	"go.viam.com/rdk/logging"
@@ -360,26 +362,54 @@ func (s *audioModPocAudioin) Record(ctx context.Context, durationSeconds int) (<
 
 }
 
-func (s *audioModPocAudioin) Play(ctx context.Context, durationSeconds int) (<-chan *audioapi.AudioChunk, error) {
-	s.logger.Infof("Starting audio recording for %d seconds", durationSeconds)
+func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.FileFormat, sampleRate int, channels int) error {
+	s.logger.Infof("Playing the audio")
 
-	audio, _, err := s.audioCapturer.StartCapture(ctx)
-	if err != nil {
-		return nil, err
+	// Initialize PortAudio
+	if err := portaudio.Initialize(); err != nil {
+		return fmt.Errorf("failed to initialize PortAudio: %w", err)
+	}
+	defer portaudio.Terminate()
+
+	switch format {
+	case pb.FileFormat_PCM16:
+		buffer := make([]int16, len(audio)/2)
+		err := binary.Read(bytes.NewReader(audio), binary.LittleEndian, &buffer)
+		if err != nil {
+			return fmt.Errorf("could convert to int16 array: %w", err)
+		}
+
+		framesPerBuffer := 1024
+
+		// Open input stream
+		stream, err := portaudio.OpenDefaultStream(
+			0,                   // input channels
+			channels,            // output channels (0 for input only)
+			float64(sampleRate), // sample rate
+			framesPerBuffer,     // frames per buffer
+			buffer,              // buffer
+		)
+
+		if err != nil {
+			return fmt.Errorf("failed to open stream: %w", err)
+		}
+		defer stream.Close()
+
+		if err := stream.Start(); err != nil {
+			return fmt.Errorf("failed to start stream: %w", err)
+		}
+
+		// This will write whats in the buffer placed in openDefaultStream
+		if err := stream.Write(); err != nil {
+			return fmt.Errorf("failed to write stream: %w", err)
+		}
+
+	default:
+		return errors.New("format not supported yet")
 	}
 
-	"hello"
-
-	fmt.Println("module is capturing audio.....")
-
-	// todo: figure out cleanup up
-	// // Return cleanup function
-	// cleanup := func() {
-	// 	capturer.Stop()
-	// }
-
-	return audio, nil
-
+	return nil
+}
 
 func (s *audioModPocAudioin) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 	return nil, errUnimplemented
