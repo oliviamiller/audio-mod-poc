@@ -373,21 +373,29 @@ func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.F
 
 	switch format {
 	case pb.FileFormat_PCM16:
-		buffer := make([]int16, len(audio)/2)
-		err := binary.Read(bytes.NewReader(audio), binary.LittleEndian, &buffer)
+		// Convert int16 PCM data to float32 for PortAudio
+		int16Data := make([]int16, len(audio)/2)
+		err := binary.Read(bytes.NewReader(audio), binary.LittleEndian, &int16Data)
 		if err != nil {
-			return fmt.Errorf("could convert to int16 array: %w", err)
+			return fmt.Errorf("could not convert to int16 array: %w", err)
+		}
+
+		// Convert int16 to float32
+		audioSamples := make([]float32, len(int16Data))
+		for i, sample := range int16Data {
+			audioSamples[i] = float32(sample) / 32768.0
 		}
 
 		framesPerBuffer := 1024
+		outputBuffer := make([]float32, framesPerBuffer*channels)
 
-		// Open input stream
+		// Open output stream
 		stream, err := portaudio.OpenDefaultStream(
 			0,                   // input channels
-			channels,            // output channels (0 for input only)
+			channels,            // output channels
 			float64(sampleRate), // sample rate
 			framesPerBuffer,     // frames per buffer
-			buffer,              // buffer
+			outputBuffer,        // buffer
 		)
 
 		if err != nil {
@@ -399,9 +407,32 @@ func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.F
 			return fmt.Errorf("failed to start stream: %w", err)
 		}
 
-		// This will write whats in the buffer placed in openDefaultStream
-		if err := stream.Write(); err != nil {
-			return fmt.Errorf("failed to write stream: %w", err)
+		// Play audio in chunks
+		totalSamples := len(audioSamples)
+		samplesPerBuffer := framesPerBuffer * channels
+
+		for offset := 0; offset < totalSamples; offset += samplesPerBuffer {
+			// Clear the buffer
+			for i := range outputBuffer {
+				outputBuffer[i] = 0
+			}
+
+			// Copy samples to buffer
+			end := offset + samplesPerBuffer
+			if end > totalSamples {
+				end = totalSamples
+			}
+
+			copy(outputBuffer[:end-offset], audioSamples[offset:end])
+
+			// Write buffer to stream
+			if err := stream.Write(); err != nil {
+				return fmt.Errorf("failed to write stream: %w", err)
+			}
+		}
+
+		if err := stream.Stop(); err != nil {
+			return fmt.Errorf("failed to stop stream: %w", err)
 		}
 
 	default:
