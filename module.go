@@ -386,7 +386,7 @@ func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.F
 		// 	audioSamples[i] = float32(sample) / 32768.0
 		// }
 
-		framesPerBuffer := 2056
+		framesPerBuffer := 2048
 		outputBuffer := make([]int16, framesPerBuffer*channels)
 
 		// Open output stream
@@ -412,10 +412,6 @@ func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.F
 		samplesPerBuffer := framesPerBuffer * channels
 
 		for offset := 0; offset < totalSamples; offset += samplesPerBuffer {
-			// Clear the buffer
-			for i := range outputBuffer {
-				outputBuffer[i] = 0
-			}
 
 			// Copy samples to buffer
 			end := offset + samplesPerBuffer
@@ -423,7 +419,7 @@ func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.F
 				end = totalSamples
 			}
 
-			n := copy(outputBuffer[:end-offset], audioSamples[offset:end])
+			n := copy(outputBuffer, audioSamples[offset:end])
 			if n < samplesPerBuffer {
 				// pad with zeros
 				for i := n; i < samplesPerBuffer; i++ {
