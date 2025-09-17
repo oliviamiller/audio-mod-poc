@@ -386,7 +386,7 @@ func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.F
 		// 	audioSamples[i] = float32(sample) / 32768.0
 		// }
 
-		framesPerBuffer := 1024
+		framesPerBuffer := 2056
 		outputBuffer := make([]int16, framesPerBuffer*channels)
 
 		// Open output stream
