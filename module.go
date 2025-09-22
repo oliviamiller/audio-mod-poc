@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	audioapi "github.com/oliviamiller/audioapi-poc"
 	pb "github.com/oliviamiller/audioapi-poc/api/api/audio"
@@ -132,39 +133,37 @@ func (ac *AudioCapturer) StartCapture(ctx context.Context) (<-chan *audioapi.Aud
 	}
 
 	// Audio parameters
-	const framesPerBuffer = 1024
+	const framesPerBuffer = 2048
 	const channels = 1 // Mono recording
 
 	// Buffer to hold audio samples
 	ac.buffer = make([]float32, framesPerBuffer*channels)
 
-	// Try a quick test stream to trigger permission dialog
-	fmt.Println("Testing microphone access to trigger permissions...")
-	testBuffer := make([]float32, 64)
-	testStream, err := portaudio.OpenDefaultStream(1, 0, float64(sampleRate), 64, testBuffer)
-	if err == nil {
-		testStream.Start()
-		testStream.Read() // This should trigger the permission dialog
-		testStream.Stop()
-		testStream.Close()
-		fmt.Println("Test stream completed")
-	} else {
-		fmt.Printf("Test stream failed: %v\n", err)
+	dev, err := portaudio.DefaultInputDevice()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get default input device: %w", err)
+	}
+
+	in := portaudio.StreamDeviceParameters{
+		Device:   dev,
+		Channels: channels,
+		Latency:  100 * time.Millisecond,
+	}
+
+	params := portaudio.StreamParameters{
+		Input:           in,
+		SampleRate:      sampleRate,
+		FramesPerBuffer: framesPerBuffer,
 	}
 
 	// Open input stream
 	fmt.Printf("Opening stream: channels=%d, sampleRate=%d, framesPerBuffer=%d, bufferLen=%d\n",
 		channels, sampleRate, framesPerBuffer, len(ac.buffer))
 
-	ac.stream, err = portaudio.OpenDefaultStream(
-		channels,            // input channels
-		0,                   // output channels (0 for input only)
-		float64(sampleRate), // sample rate
-		framesPerBuffer,     // frames per buffer
-		ac.buffer,           // buffer
-	)
+	ac.stream, err = portaudio.OpenStream(params, ac.buffer)
 	if err != nil {
-		portaudio.Terminate()
+		fmt.Println("HERE FAILES TO OPEN STREAM")
+		fmt.Println(err)
 		return nil, nil, fmt.Errorf("failed to open stream: %w", err)
 	}
 
@@ -200,6 +199,7 @@ func (ac *AudioCapturer) captureLoop(ctx context.Context, chunkChan chan<- *audi
 	for ac.isRunning {
 		select {
 		case <-ctx.Done():
+			fmt.Println("context done, returning")
 			return
 		default:
 		}
@@ -207,14 +207,17 @@ func (ac *AudioCapturer) captureLoop(ctx context.Context, chunkChan chan<- *audi
 		// Read audio data
 		if err := ac.stream.Read(); err != nil {
 			// Handle input overflow gracefully - common on Linux
-			if err.Error() == "input overflowed" {
+			if err.Error() == "Input overflowed" {
 				fmt.Println("Audio input overflow, skipping buffer...")
 				continue // Skip this buffer and continue capturing
 			}
+			fmt.Println("ERROR READING THE STREAM")
+			fmt.Println(err)
 			// For other errors, exit the loop
 			select {
 			case errorChan <- fmt.Errorf("failed to read stream: %w", err):
 			case <-ctx.Done():
+				fmt.Println("here context done, returning")
 			}
 			return
 		}
@@ -222,9 +225,9 @@ func (ac *AudioCapturer) captureLoop(ctx context.Context, chunkChan chan<- *audi
 		// Convert float32 samples to int16 PCM bytes
 		pcmData := make([]byte, len(ac.buffer)*2) // 2 bytes per int16 sample
 		for i, sample := range ac.buffer {
-			if sample != 0.0 {
-				fmt.Println(sample)
-			}
+			// if sample != 0.0 {
+			// 	fmt.Println(sample)
+			// }
 			// Clamp sample to valid range
 			if sample > 1.0 {
 				sample = 1.0
@@ -249,6 +252,7 @@ func (ac *AudioCapturer) captureLoop(ctx context.Context, chunkChan chan<- *audi
 		select {
 		case chunkChan <- chunk:
 		case <-ctx.Done():
+			fmt.Println("context is done")
 			return
 		}
 	}
@@ -345,7 +349,9 @@ func captureAudio(filename string, durationSeconds int) error {
 func (s *audioModPocAudioin) Record(ctx context.Context, durationSeconds int) (<-chan *audioapi.AudioChunk, error) {
 	s.logger.Infof("Starting audio recording for %d seconds", durationSeconds)
 
-	audio, _, err := s.audioCapturer.StartCapture(ctx)
+	timeoutCtx, _ := context.WithTimeout(ctx, time.Duration(durationSeconds)*time.Second)
+
+	audio, _, err := s.audioCapturer.StartCapture(timeoutCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -353,7 +359,7 @@ func (s *audioModPocAudioin) Record(ctx context.Context, durationSeconds int) (<
 	fmt.Println("module is capturing audio.....")
 
 	// todo: figure out cleanup up
-	// // Return cleanup function
+	// // Return cleanup functiona
 	// cleanup := func() {
 	// 	capturer.Stop()
 	// }
@@ -371,6 +377,14 @@ func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.F
 	}
 	defer portaudio.Terminate()
 
+	defaultOutput, err := portaudio.DefaultOutputDevice()
+	if err != nil {
+		fmt.Printf("Error getting default output device: %v\n", err)
+	} else {
+		fmt.Printf("Default output device: %s (outputs: %d), sample rate %d \n",
+			defaultOutput.Name, defaultOutput.MaxOutputChannels, defaultOutput.DefaultSampleRate)
+	}
+
 	switch format {
 	case pb.FileFormat_PCM16:
 		// Convert int16 PCM data to float32 for PortAudio
@@ -379,15 +393,19 @@ func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.F
 		if err != nil {
 			return fmt.Errorf("could not convert to int16 array: %w", err)
 		}
-
-		// // Convert int16 to float32
-		// audioSamples := make([]float32, len(int16Data))
-		// for i, sample := range int16Data {
-		// 	audioSamples[i] = float32(sample) / 32768.0
-		// }
-
 		framesPerBuffer := 2048
 		outputBuffer := make([]int16, framesPerBuffer*channels)
+
+		// dev, err := portaudio.DefaultOutputDevice()
+		// if err != nil {
+		// 	return err
+		// }
+
+		// out := portaudio.StreamDeviceParameters{
+		// 	Device:   dev,
+		// 	Channels: channels,
+		// 	Latency:  100 * time.Millisecond,
+		// }
 
 		// Open output stream
 		stream, err := portaudio.OpenDefaultStream(
@@ -402,6 +420,11 @@ func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.F
 			return fmt.Errorf("failed to open stream: %w", err)
 		}
 		defer stream.Close()
+
+		info := stream.Info()
+		fmt.Printf("Input latency:  %d sec\n", info.InputLatency.Milliseconds())
+		fmt.Printf("Output latency: %d sec\n", info.OutputLatency.Milliseconds())
+		fmt.Printf("Sample rate:    %f\n", info.SampleRate)
 
 		if err := stream.Start(); err != nil {
 			return fmt.Errorf("failed to start stream: %w", err)
@@ -431,8 +454,6 @@ func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.F
 			if err := stream.Write(); err != nil {
 				return fmt.Errorf("failed to write stream: %w", err)
 			}
-
-			fmt.Println("successfully wrote data")
 		}
 
 		if err := stream.Stop(); err != nil {
