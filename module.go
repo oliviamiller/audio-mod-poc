@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	audioapi "github.com/oliviamiller/audioapi-poc"
@@ -73,7 +72,7 @@ func newAudioModPocAudioin(ctx context.Context, deps resource.Dependencies, rawC
 func NewAudioin(ctx context.Context, deps resource.Dependencies, name resource.Name, conf *Config, logger logging.Logger) (audioapi.Audio, error) {
 	cancelCtx, cancelFunc := context.WithCancel(context.Background())
 
-	audioCapturer := NewAudioCapturer()
+	audioCapturer := NewAudioCapturer(audioapi.Pcm32Float) // Default format
 
 	s := &audioModPocAudioin{
 		name:          name,
@@ -90,26 +89,29 @@ func (s *audioModPocAudioin) Name() resource.Name {
 	return s.name
 }
 
-const sampleRate = 44100
+//const sampleRate = 44100
 
 // AudioCapturer handles audio capture and streaming via channels
 type AudioCapturer struct {
 	stream    *portaudio.Stream
-	buffer    []float32
+	buffer    interface{} // Can be []int16, []float32, or []int32
+	format    audioapi.AudioFormat
 	sequence  int32
 	isRunning bool
 }
 
 // NewAudioCapturer creates a new audio capturer
-func NewAudioCapturer() *AudioCapturer {
-	return &AudioCapturer{}
+func NewAudioCapturer(format audioapi.AudioFormat) *AudioCapturer {
+	return &AudioCapturer{
+		format: format,
+	}
 }
 
 // StartCapture initializes audio capture and returns a channel of audio chunks
-func (ac *AudioCapturer) StartCapture(ctx context.Context) (<-chan *audioapi.AudioChunk, <-chan error, error) {
+func (ac *AudioCapturer) StartCapture(ctx context.Context, format audioapi.AudioFormat, sampleRate int, channels int) (<-chan *audioapi.AudioChunk, error) {
 	// Initialize PortAudio
 	if err := portaudio.Initialize(); err != nil {
-		return nil, nil, fmt.Errorf("failed to initialize PortAudio: %w", err)
+		return nil, fmt.Errorf("failed to initialize PortAudio: %w", err)
 	}
 
 	// Debug: List available devices
@@ -134,14 +136,22 @@ func (ac *AudioCapturer) StartCapture(ctx context.Context) (<-chan *audioapi.Aud
 
 	// Audio parameters
 	const framesPerBuffer = 2048
-	const channels = 1 // Mono recording
 
-	// Buffer to hold audio samples
-	ac.buffer = make([]float32, framesPerBuffer*channels)
+	// Buffer to hold audio samples based on format
+	switch format {
+	case audioapi.Pcm16:
+		ac.buffer = make([]int16, framesPerBuffer*channels)
+	case audioapi.Pcm32:
+		ac.buffer = make([]int32, framesPerBuffer*channels)
+	case audioapi.Pcm32Float:
+		ac.buffer = make([]float32, framesPerBuffer*channels)
+	default:
+		ac.buffer = make([]float32, framesPerBuffer*channels) // Default to float32
+	}
 
 	dev, err := portaudio.DefaultInputDevice()
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get default input device: %w", err)
+		return nil, fmt.Errorf("failed to get default input device: %w", err)
 	}
 
 	in := portaudio.StreamDeviceParameters{
@@ -152,19 +162,32 @@ func (ac *AudioCapturer) StartCapture(ctx context.Context) (<-chan *audioapi.Aud
 
 	params := portaudio.StreamParameters{
 		Input:           in,
-		SampleRate:      sampleRate,
+		SampleRate:      float64(sampleRate),
 		FramesPerBuffer: framesPerBuffer,
+	}
+
+	// Get buffer length based on type
+	var bufferLen int
+	switch format {
+	case audioapi.Pcm16:
+		bufferLen = len(ac.buffer.([]int16))
+	case audioapi.Pcm32:
+		bufferLen = len(ac.buffer.([]int32))
+	case audioapi.Pcm32Float:
+		bufferLen = len(ac.buffer.([]float32))
+	default:
+		bufferLen = len(ac.buffer.([]float32))
 	}
 
 	// Open input stream
 	fmt.Printf("Opening stream: channels=%d, sampleRate=%d, framesPerBuffer=%d, bufferLen=%d\n",
-		channels, sampleRate, framesPerBuffer, len(ac.buffer))
+		channels, sampleRate, framesPerBuffer, bufferLen)
 
 	ac.stream, err = portaudio.OpenStream(params, ac.buffer)
 	if err != nil {
-		fmt.Println("HERE FAILES TO OPEN STREAM")
+		fmt.Println("HERE FAILED TO OPEN STREAM")
 		fmt.Println(err)
-		return nil, nil, fmt.Errorf("failed to open stream: %w", err)
+		return nil, fmt.Errorf("failed to open stream: %w", err)
 	}
 
 	fmt.Printf("Stream opened successfully. Info: %+v\n", ac.stream.Info())
@@ -172,7 +195,7 @@ func (ac *AudioCapturer) StartCapture(ctx context.Context) (<-chan *audioapi.Aud
 	if err := ac.stream.Start(); err != nil {
 		ac.stream.Close()
 		portaudio.Terminate()
-		return nil, nil, fmt.Errorf("failed to start stream: %w", err)
+		return nil, fmt.Errorf("failed to start stream: %w", err)
 	}
 
 	ac.sequence = 0
@@ -180,19 +203,17 @@ func (ac *AudioCapturer) StartCapture(ctx context.Context) (<-chan *audioapi.Aud
 
 	// Create channels for audio chunks and errors
 	chunkChan := make(chan *audioapi.AudioChunk, 10) // Buffer for smoother streaming
-	errorChan := make(chan error, 1)
 
 	// Start goroutine to capture audio
-	go ac.captureLoop(ctx, chunkChan, errorChan)
+	go ac.captureLoop(ctx, chunkChan, format)
 
-	return chunkChan, errorChan, nil
+	return chunkChan, nil
 }
 
 // captureLoop runs the audio capture loop
-func (ac *AudioCapturer) captureLoop(ctx context.Context, chunkChan chan<- *audioapi.AudioChunk, errorChan chan<- error) {
+func (ac *AudioCapturer) captureLoop(ctx context.Context, chunkChan chan<- *audioapi.AudioChunk, format audioapi.AudioFormat) {
 	defer func() {
 		close(chunkChan)
-		close(errorChan)
 		ac.Stop()
 	}()
 
@@ -213,37 +234,85 @@ func (ac *AudioCapturer) captureLoop(ctx context.Context, chunkChan chan<- *audi
 			}
 			fmt.Println("ERROR READING THE STREAM")
 			fmt.Println(err)
-			// For other errors, exit the loop
+
+			// Create audio chunk
+			chunk := &audioapi.AudioChunk{
+				Err: fmt.Errorf("failed to read stream: %w", err),
+			}
+			// Send chunk to channel
 			select {
-			case errorChan <- fmt.Errorf("failed to read stream: %w", err):
+			case chunkChan <- chunk:
 			case <-ctx.Done():
-				fmt.Println("here context done, returning")
+				fmt.Println("context is done")
+				return
 			}
 			return
 		}
 
-		// Convert float32 samples to int16 PCM bytes
-		pcmData := make([]byte, len(ac.buffer)*2) // 2 bytes per int16 sample
-		for i, sample := range ac.buffer {
-			// if sample != 0.0 {
-			// 	fmt.Println(sample)
-			// }
-			// Clamp sample to valid range
-			if sample > 1.0 {
-				sample = 1.0
-			} else if sample < -1.0 {
-				sample = -1.0
+		var pcmData []byte
+		switch format {
+		case audioapi.Pcm16:
+			buffer := ac.buffer.([]int16)
+			buf := new(bytes.Buffer)
+
+			// Write int16 audio data to byte array in little-endian
+			for _, val := range buffer {
+				err := binary.Write(buf, binary.LittleEndian, val)
+				if err != nil {
+					fmt.Println("Error writing int16:", err)
+					return
+				}
 			}
-			// Convert float32 to int16
-			intSample := int16(sample * 32767.0)
-			// Write as little-endian bytes
-			pcmData[i*2] = byte(intSample & 0xFF)
-			pcmData[i*2+1] = byte((intSample >> 8) & 0xFF)
+			pcmData = buf.Bytes()
+		case audioapi.Pcm32:
+			buffer := ac.buffer.([]int32)
+			buf := new(bytes.Buffer)
+
+			// Write int32 audio data to byte array in little-endian
+			for _, val := range buffer {
+				err := binary.Write(buf, binary.LittleEndian, val)
+				if err != nil {
+					fmt.Println("Error writing int32:", err)
+					return
+				}
+			}
+			pcmData = buf.Bytes()
+		case audioapi.Pcm32Float:
+			buffer := ac.buffer.([]float32)
+			buf := new(bytes.Buffer)
+
+			// Write float32 audio data to byte array in little-endian
+			for _, val := range buffer {
+				err := binary.Write(buf, binary.LittleEndian, val)
+				if err != nil {
+					fmt.Println("Error writing float32:", err)
+					return
+				}
+			}
+			pcmData = buf.Bytes()
+		default:
+			// Fallback to float32 converted to int16
+			buffer := ac.buffer.([]float32)
+			pcmData = make([]byte, len(buffer)*2) // 2 bytes per int16 sample
+			for i, sample := range buffer {
+				// Clamp sample to valid range
+				if sample > 1.0 {
+					sample = 1.0
+				} else if sample < -1.0 {
+					sample = -1.0
+				}
+				// Convert float32 to int16
+				intSample := int16(sample * 32767.0)
+				// Write as little-endian bytes
+				pcmData[i*2] = byte(intSample & 0xFF)
+				pcmData[i*2+1] = byte((intSample >> 8) & 0xFF)
+			}
 		}
 
 		// Create audio chunk
 		chunk := &audioapi.AudioChunk{
 			AudioData: pcmData,
+			Sequence:  int64(ac.sequence),
 		}
 
 		ac.sequence++
@@ -269,89 +338,12 @@ func (ac *AudioCapturer) Stop() {
 	portaudio.Terminate()
 }
 
-func captureAudio(filename string, durationSeconds int) error {
-	fmt.Println("trying to capture audio")
-
-	// Initialize PortAudio
-	if err := portaudio.Initialize(); err != nil {
-		return fmt.Errorf("failed to initialize PortAudio: %w", err)
-	}
-	defer portaudio.Terminate()
-
-	// Audio parameters
-	const framesPerBuffer = 1024
-	const channels = 1 // Mono recording
-
-	// Buffer to hold audio samples
-	buffer := make([]float32, framesPerBuffer*channels)
-	var recordedSamples []float32
-
-	// Open input stream
-	stream, err := portaudio.OpenDefaultStream(
-		channels,            // input channels
-		0,                   // output channels (0 for input only)
-		float64(sampleRate), // sample rate
-		framesPerBuffer,     // frames per buffer
-		buffer,              // buffer
-	)
-	if err != nil {
-		return fmt.Errorf("failed to open stream: %w", err)
-	}
-	defer stream.Close()
-
-	if err := stream.Start(); err != nil {
-		return fmt.Errorf("failed to start stream: %w", err)
-	}
-	fmt.Println("recording audio...")
-
-	// Calculate number of reads needed
-	numReads := (sampleRate * durationSeconds) / framesPerBuffer
-	for i := 0; i < numReads; i++ {
-		if err := stream.Read(); err != nil {
-			return fmt.Errorf("failed to read stream: %w", err)
-		}
-		recordedSamples = append(recordedSamples, buffer...)
-	}
-
-	fmt.Println("stopping stream...")
-	if err := stream.Stop(); err != nil {
-		return fmt.Errorf("failed to stop stream: %w", err)
-	}
-
-	// Create output file
-	file, err := os.Create(filename)
-	if err != nil {
-		return fmt.Errorf("failed to create file: %w", err)
-	}
-	defer file.Close()
-
-	// Write raw audio data as 16-bit PCM
-	for _, sample := range recordedSamples {
-		if sample != 0.0 {
-		}
-		// Clamp sample to valid range
-		if sample > 1.0 {
-			sample = 1.0
-		} else if sample < -1.0 {
-			sample = -1.0
-		}
-		// Convert float32 to int16
-		intSample := int16(sample * 32767.0)
-		if err := binary.Write(file, binary.LittleEndian, intSample); err != nil {
-			return fmt.Errorf("failed to write sample: %w", err)
-		}
-	}
-
-	fmt.Printf("Recorded %d samples to %s\n", len(recordedSamples), filename)
-	return nil
-}
-
-func (s *audioModPocAudioin) Record(ctx context.Context, durationSeconds int) (<-chan *audioapi.AudioChunk, error) {
+func (s *audioModPocAudioin) Record(ctx context.Context, info audioapi.AudioInfo, durationSeconds int) (<-chan *audioapi.AudioChunk, error) {
 	s.logger.Infof("Starting audio recording for %d seconds", durationSeconds)
 
 	timeoutCtx, _ := context.WithTimeout(ctx, time.Duration(durationSeconds)*time.Second)
 
-	audio, _, err := s.audioCapturer.StartCapture(timeoutCtx)
+	audio, err := s.audioCapturer.StartCapture(timeoutCtx, info.Format, info.SampleRate, info.Channels)
 	if err != nil {
 		return nil, err
 	}
@@ -368,7 +360,7 @@ func (s *audioModPocAudioin) Record(ctx context.Context, durationSeconds int) (<
 
 }
 
-func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.FileFormat, sampleRate int, channels int) error {
+func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.AudioFormat, sampleRate int, channels int) error {
 	s.logger.Infof("Playing the audio")
 
 	// Initialize PortAudio
@@ -386,7 +378,7 @@ func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.F
 	}
 
 	switch format {
-	case pb.FileFormat_PCM16:
+	case pb.AudioFormat_PCM16:
 		// Convert int16 PCM data to float32 for PortAudio
 		audioSamples := make([]int16, len(audio)/2)
 		err := binary.Read(bytes.NewReader(audio), binary.LittleEndian, &audioSamples)
