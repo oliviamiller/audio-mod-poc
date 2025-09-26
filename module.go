@@ -59,9 +59,9 @@ type audioModPocAudioin struct {
 	logger logging.Logger
 	cfg    *Config
 
-	// Remove shared audioCapturer - create per recording instead
-	cancelCtx  context.Context
-	cancelFunc func()
+	audioCapturer *AudioCapturer
+	cancelCtx     context.Context
+	cancelFunc    func()
 }
 
 func newAudioModPocAudioin(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (audioapi.Audio, error) {
@@ -76,7 +76,9 @@ func newAudioModPocAudioin(ctx context.Context, deps resource.Dependencies, rawC
 func NewAudioin(ctx context.Context, deps resource.Dependencies, name resource.Name, conf *Config, logger logging.Logger) (audioapi.Audio, error) {
 	cancelCtx, cancelFunc := context.WithCancel(context.Background())
 
-	// Initialize PortAudio once at startup
+	audioCapturer := NewAudioCapturer(audioapi.Pcm32Float) // Default format
+
+	// Initialize PortAudio
 	if err := portaudio.Initialize(); err != nil {
 		return nil, fmt.Errorf("failed to initialize PortAudio: %w", err)
 	}
@@ -94,11 +96,12 @@ func NewAudioin(ctx context.Context, deps resource.Dependencies, name resource.N
 	}
 
 	s := &audioModPocAudioin{
-		name:       name,
-		logger:     logger,
-		cfg:        conf,
-		cancelCtx:  cancelCtx,
-		cancelFunc: cancelFunc,
+		name:          name,
+		logger:        logger,
+		cfg:           conf,
+		audioCapturer: audioCapturer,
+		cancelCtx:     cancelCtx,
+		cancelFunc:    cancelFunc,
 	}
 	return s, nil
 }
@@ -371,29 +374,31 @@ func (ac *AudioCapturer) Stop() {
 		ac.mp3Encoder = nil
 	}
 
-	// Note: Don't call portaudio.Terminate() here since other capturers might be running
 }
 
 func (s *audioModPocAudioin) Record(ctx context.Context, info audioapi.AudioInfo, durationSeconds int) (<-chan *audioapi.AudioChunk, error) {
 	s.logger.Infof("Starting audio recording for %d seconds", durationSeconds)
-
-	// Create a new AudioCapturer for each recording call
-	audioCapturer := NewAudioCapturer(info.Format)
 
 	var captureCtx context.Context
 	captureCtx = ctx
 	if durationSeconds != 0 {
 		captureCtx, _ = context.WithTimeout(ctx, time.Duration(durationSeconds)*time.Second)
 	}
-
-	audio, err := audioCapturer.StartCapture(captureCtx, info.Format, info.SampleRate, info.Channels)
+	audio, err := s.audioCapturer.StartCapture(captureCtx, info.Format, info.SampleRate, info.Channels)
 	if err != nil {
 		return nil, err
 	}
 
 	fmt.Println("module is capturing audio.....")
 
+	// todo: figure out cleanup up
+	// // Return cleanup functiona
+	// cleanup := func() {
+	// 	capturer.Stop()
+	// }
+
 	return audio, nil
+
 }
 
 func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.AudioFormat, sampleRate int, channels int) error {
@@ -567,8 +572,9 @@ func (s *audioModPocAudioin) DoCommand(ctx context.Context, cmd map[string]inter
 }
 
 func (s *audioModPocAudioin) Close(context.Context) error {
-	// No shared audioCapturer to stop - each recording manages its own lifecycle
+	if s.audioCapturer != nil {
+		s.audioCapturer.Stop()
+	}
 	s.cancelFunc()
-	portaudio.Terminate() // Clean up PortAudio on module shutdown
 	return nil
 }
