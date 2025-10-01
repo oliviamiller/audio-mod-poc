@@ -6,14 +6,11 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"time"
 
 	"github.com/braheezy/shine-mp3/pkg/mp3"
-	mp32 "github.com/hajimehoshi/go-mp3"
 
 	audioapi "github.com/oliviamiller/audioapi-poc"
-	pb "github.com/oliviamiller/audioapi-poc/grpc"
 
 	"github.com/gordonklaus/portaudio"
 	"go.viam.com/rdk/logging"
@@ -376,7 +373,7 @@ func (ac *AudioCapturer) Stop() {
 
 }
 
-func (s *audioModPocAudioin) Record(ctx context.Context, info audioapi.AudioInfo, durationSeconds int) (<-chan *audioapi.AudioChunk, error) {
+func (s *audioModPocAudioin) GetAudio(ctx context.Context, codec string, durationSeconds float32, maxDuration float32, previousTimeStamp int64) (<-chan *audioapi.AudioChunk, error) {
 	s.logger.Infof("Starting audio recording for %d seconds", durationSeconds)
 
 	var captureCtx context.Context
@@ -384,7 +381,8 @@ func (s *audioModPocAudioin) Record(ctx context.Context, info audioapi.AudioInfo
 	if durationSeconds != 0 {
 		captureCtx, _ = context.WithTimeout(ctx, time.Duration(durationSeconds)*time.Second)
 	}
-	audio, err := s.audioCapturer.StartCapture(captureCtx, info.Format, info.SampleRate, info.Channels)
+	// hardcorded for now. need to add these params to the config
+	audio, err := s.audioCapturer.StartCapture(captureCtx, audioapi.Pcm16, 44100, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -401,167 +399,174 @@ func (s *audioModPocAudioin) Record(ctx context.Context, info audioapi.AudioInfo
 
 }
 
-func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.AudioFormat, sampleRate int, channels int) error {
-	s.logger.Infof("Playing the audio")
+// func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, format pb.AudioFormat, sampleRate int, channels int) error {
+// 	s.logger.Infof("Playing the audio")
 
-	// Initialize PortAudio
-	if err := portaudio.Initialize(); err != nil {
-		return fmt.Errorf("failed to initialize PortAudio: %w", err)
-	}
-	defer portaudio.Terminate()
+// 	// Initialize PortAudio
+// 	if err := portaudio.Initialize(); err != nil {
+// 		return fmt.Errorf("failed to initialize PortAudio: %w", err)
+// 	}
+// 	defer portaudio.Terminate()
 
-	defaultOutput, err := portaudio.DefaultOutputDevice()
-	if err != nil {
-		fmt.Printf("Error getting default output device: %v\n", err)
-	} else {
-		fmt.Printf("Default output device: %s (outputs: %d), sample rate %d \n",
-			defaultOutput.Name, defaultOutput.MaxOutputChannels, defaultOutput.DefaultSampleRate)
-	}
+// 	defaultOutput, err := portaudio.DefaultOutputDevice()
+// 	if err != nil {
+// 		fmt.Printf("Error getting default output device: %v\n", err)
+// 	} else {
+// 		fmt.Printf("Default output device: %s (outputs: %d), sample rate %d \n",
+// 			defaultOutput.Name, defaultOutput.MaxOutputChannels, defaultOutput.DefaultSampleRate)
+// 	}
 
-	audioSamples := make([]int16, len(audio)/2)
-	framesPerBuffer := 2048
+// 	audioSamples := make([]int16, len(audio)/2)
+// 	framesPerBuffer := 2048
 
-	switch format {
-	case pb.AudioFormat_PCM16:
-		err := binary.Read(bytes.NewReader(audio), binary.LittleEndian, &audioSamples)
-		if err != nil {
-			return fmt.Errorf("could not convert to int16 array: %w", err)
-		}
-		outputBuffer := make([]int16, framesPerBuffer*channels)
+// 	switch format {
+// 	case pb.AudioFormat_PCM16:
+// 		err := binary.Read(bytes.NewReader(audio), binary.LittleEndian, &audioSamples)
+// 		if err != nil {
+// 			return fmt.Errorf("could not convert to int16 array: %w", err)
+// 		}
+// 		outputBuffer := make([]int16, framesPerBuffer*channels)
 
-		// dev, err := portaudio.DefaultOutputDevice()
-		// if err != nil {
-		// 	return err
-		// }
+// 		// dev, err := portaudio.DefaultOutputDevice()
+// 		// if err != nil {
+// 		// 	return err
+// 		// }
 
-		// out := portaudio.StreamDeviceParameters{
-		// 	Device:   dev,
-		// 	Channels: channels,
-		// 	Latency:  100 * time.Millisecond,
-		// }
+// 		// out := portaudio.StreamDeviceParameters{
+// 		// 	Device:   dev,
+// 		// 	Channels: channels,
+// 		// 	Latency:  100 * time.Millisecond,
+// 		// }
 
-		// Open output stream
-		stream, err := portaudio.OpenDefaultStream(
-			0,                   // input channels
-			channels,            // output channels
-			float64(sampleRate), // sample rate
-			framesPerBuffer,     // frames per buffer
-			outputBuffer,        // buffer
-		)
+// 		// Open output stream
+// 		stream, err := portaudio.OpenDefaultStream(
+// 			0,                   // input channels
+// 			channels,            // output channels
+// 			float64(sampleRate), // sample rate
+// 			framesPerBuffer,     // frames per buffer
+// 			outputBuffer,        // buffer
+// 		)
 
-		if err != nil {
-			return fmt.Errorf("failed to open stream: %w", err)
-		}
-		defer stream.Close()
+// 		if err != nil {
+// 			return fmt.Errorf("failed to open stream: %w", err)
+// 		}
+// 		defer stream.Close()
 
-		info := stream.Info()
-		fmt.Printf("Input latency:  %d sec\n", info.InputLatency.Milliseconds())
-		fmt.Printf("Output latency: %d sec\n", info.OutputLatency.Milliseconds())
-		fmt.Printf("Sample rate:    %f\n", info.SampleRate)
+// 		info := stream.Info()
+// 		fmt.Printf("Input latency:  %d sec\n", info.InputLatency.Milliseconds())
+// 		fmt.Printf("Output latency: %d sec\n", info.OutputLatency.Milliseconds())
+// 		fmt.Printf("Sample rate:    %f\n", info.SampleRate)
 
-		if err := stream.Start(); err != nil {
-			return fmt.Errorf("failed to start stream: %w", err)
-		}
+// 		if err := stream.Start(); err != nil {
+// 			return fmt.Errorf("failed to start stream: %w", err)
+// 		}
 
-		// Play audio in chunks
-		totalSamples := len(audioSamples)
-		samplesPerBuffer := framesPerBuffer * channels
+// 		// Play audio in chunks
+// 		totalSamples := len(audioSamples)
+// 		samplesPerBuffer := framesPerBuffer * channels
 
-		for offset := 0; offset < totalSamples; offset += samplesPerBuffer {
-			// Copy samples to buffer
-			end := offset + samplesPerBuffer
-			if end > totalSamples {
-				end = totalSamples
-			}
+// 		for offset := 0; offset < totalSamples; offset += samplesPerBuffer {
+// 			// Copy samples to buffer
+// 			end := offset + samplesPerBuffer
+// 			if end > totalSamples {
+// 				end = totalSamples
+// 			}
 
-			n := copy(outputBuffer, audioSamples[offset:end])
-			if n < samplesPerBuffer {
-				// pad with zeros
-				for i := n; i < samplesPerBuffer; i++ {
-					outputBuffer[i] = 0
-				}
-			}
+// 			n := copy(outputBuffer, audioSamples[offset:end])
+// 			if n < samplesPerBuffer {
+// 				// pad with zeros
+// 				for i := n; i < samplesPerBuffer; i++ {
+// 					outputBuffer[i] = 0
+// 				}
+// 			}
 
-			// Write buffer to stream
-			if err := stream.Write(); err != nil {
-				return fmt.Errorf("failed to write stream: %w", err)
-			}
-		}
+// 			// Write buffer to stream
+// 			if err := stream.Write(); err != nil {
+// 				return fmt.Errorf("failed to write stream: %w", err)
+// 			}
+// 		}
 
-		if err := stream.Stop(); err != nil {
-			return fmt.Errorf("failed to stop stream: %w", err)
-		}
-	case pb.AudioFormat_MP3:
-		reader := bytes.NewReader(audio)
-		decoder, err := mp32.NewDecoder(reader)
-		if err != nil {
-			return fmt.Errorf("failed to get decoder: %w", err)
-		}
-		rate := decoder.SampleRate()
-		chans := 2
-		outputBuffer := make([]int16, framesPerBuffer*chans)
+// 		if err := stream.Stop(); err != nil {
+// 			return fmt.Errorf("failed to stop stream: %w", err)
+// 		}
+// 	case pb.AudioFormat_MP3:
+// 		reader := bytes.NewReader(audio)
+// 		decoder, err := mp32.NewDecoder(reader)
+// 		if err != nil {
+// 			return fmt.Errorf("failed to get decoder: %w", err)
+// 		}
+// 		rate := decoder.SampleRate()
+// 		chans := 2
+// 		outputBuffer := make([]int16, framesPerBuffer*chans)
 
-		fmt.Printf("MP3 sample rate: %d, channels: %d\n", rate, chans)
+// 		fmt.Printf("MP3 sample rate: %d, channels: %d\n", rate, chans)
 
-		stream, err := portaudio.OpenDefaultStream(
-			0,               // input channels
-			chans,           // output channels
-			float64(rate),   // sample rate
-			framesPerBuffer, // frames per buffer
-			outputBuffer,    // buffer
-		)
+// 		stream, err := portaudio.OpenDefaultStream(
+// 			0,               // input channels
+// 			chans,           // output channels
+// 			float64(rate),   // sample rate
+// 			framesPerBuffer, // frames per buffer
+// 			outputBuffer,    // buffer
+// 		)
 
-		if err != nil {
-			return fmt.Errorf("failed to open stream: %w", err)
-		}
-		defer stream.Close()
+// 		if err != nil {
+// 			return fmt.Errorf("failed to open stream: %w", err)
+// 		}
+// 		defer stream.Close()
 
-		if err := stream.Start(); err != nil {
-			return fmt.Errorf("failed to start stream: %w", err)
-		}
+// 		if err := stream.Start(); err != nil {
+// 			return fmt.Errorf("failed to start stream: %w", err)
+// 		}
 
-		for {
-			// Read directly into byte buffer sized for outputBuffer
-			pcmBytes := make([]byte, len(outputBuffer)*2) // 2 bytes per int16
-			numRead, err := decoder.Read(pcmBytes)
-			if err != nil && err != io.EOF {
-				return fmt.Errorf("error reading: %w", err)
-			}
+// 		for {
+// 			// Check if client disconnected
+// 			select {
+// 			case <-ctx.Done():
+// 				return ctx.Err() // Stop immediately on disconnect
+// 			default:
+// 			}
 
-			fmt.Println(numRead)
+// 			// Read directly into byte buffer sized for outputBuffer
+// 			pcmBytes := make([]byte, len(outputBuffer)*2) // 2 bytes per int16
+// 			numRead, err := decoder.Read(pcmBytes)
+// 			if err != nil && err != io.EOF {
+// 				return fmt.Errorf("error reading: %w", err)
+// 			}
 
-			if numRead == 0 {
-				break
-			}
+// 			fmt.Println(numRead)
 
-			// Convert directly to outputBuffer
-			samplesRead := numRead / 2 // 2 bytes per int16 sample
-			err = binary.Read(bytes.NewReader(pcmBytes[:numRead]), binary.LittleEndian, outputBuffer[:samplesRead])
-			if err != nil {
-				return fmt.Errorf("error converting to int16: %w", err)
-			}
+// 			if numRead == 0 {
+// 				break
+// 			}
 
-			// Clear remaining buffer if partial read
-			for i := samplesRead; i < len(outputBuffer); i++ {
-				outputBuffer[i] = 0
-			}
+// 			// Convert directly to outputBuffer
+// 			samplesRead := numRead / 2 // 2 bytes per int16 sample
+// 			err = binary.Read(bytes.NewReader(pcmBytes[:numRead]), binary.LittleEndian, outputBuffer[:samplesRead])
+// 			if err != nil {
+// 				return fmt.Errorf("error converting to int16: %w", err)
+// 			}
 
-			if err := stream.Write(); err != nil {
-				return fmt.Errorf("error writing to stream: %w", err)
-			}
-		}
+// 			// Clear remaining buffer if partial read
+// 			for i := samplesRead; i < len(outputBuffer); i++ {
+// 				outputBuffer[i] = 0
+// 			}
 
-		if err := stream.Stop(); err != nil {
-			return fmt.Errorf("failed to stop stream: %w", err)
-		}
-	default:
-		return errors.New("format not supported yet")
-	}
+// 			if err := stream.Write(); err != nil {
+// 				return fmt.Errorf("error writing to stream: %w", err)
+// 			}
+// 		}
 
-	fmt.Println("audio successfully played!")
+// 		if err := stream.Stop(); err != nil {
+// 			return fmt.Errorf("failed to stop stream: %w", err)
+// 		}
+// 	default:
+// 		return errors.New("format not supported yet")
+// 	}
 
-	return nil
-}
+// 	fmt.Println("audio successfully played!")
+
+// 	return nil
+// }
 
 func (s *audioModPocAudioin) Properties(ctx context.Context) (audioapi.Properties, error) {
 	return audioapi.Properties{}, nil
