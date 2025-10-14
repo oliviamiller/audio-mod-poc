@@ -1,19 +1,19 @@
 module audiomodpoc
 
-go 1.24.0
-
-toolchain go1.24.7
+go 1.25.1
 
 require (
+	github.com/braheezy/shine-mp3 v0.1.0
 	github.com/gordonklaus/portaudio v0.0.0-20250206071425-98a94950218b
-	github.com/oliviamiller/audioapi-poc v0.0.0-20250911220825-81d1f7cd999a
+	github.com/hajimehoshi/go-mp3 v0.3.4
+	github.com/oliviamiller/audioapi-poc v0.0.0-20251003172848-17a9004a2c8d
 	github.com/pion/mediadevices v0.7.1
 	go.viam.com/rdk v0.92.0
 )
 
-replace github.com/oliviamiller/audioapi-poc => ../audiopoc
+replace go.viam.com/rdk => ../rdk
 
-replace github.com/viamrobotics/rdk => ../rdk
+replace go.viam.com/api => ../api
 
 require github.com/pion/webrtc/v4 v4.1.4 // indirect
 
@@ -41,7 +41,6 @@ require (
 	github.com/benbjohnson/clock v1.3.5 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/bluenviron/gortsplib/v4 v4.8.0 // indirect
-	github.com/braheezy/shine-mp3 v0.1.0 // indirect
 	github.com/bufbuild/protocompile v0.14.1 // indirect
 	github.com/campoy/embedmd v1.0.0 // indirect
 	github.com/cenkalti/backoff v2.2.1+incompatible // indirect
@@ -67,9 +66,6 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/fullstorydev/grpcurl v1.8.6 // indirect
 	github.com/gen2brain/malgo v0.11.23 // indirect
-	github.com/go-audio/audio v1.0.0 // indirect
-	github.com/go-audio/riff v1.0.0 // indirect
-	github.com/go-audio/wav v1.1.0 // indirect
 	github.com/go-gl/mathgl v1.2.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.2 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
@@ -92,7 +88,6 @@ require (
 	github.com/gorilla/securecookie v1.1.2 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.2 // indirect
-	github.com/hajimehoshi/go-mp3 v0.3.4 // indirect
 	github.com/improbable-eng/grpc-web v0.15.0 // indirect
 	github.com/jedib0t/go-pretty/v6 v6.6.8 // indirect
 	github.com/jhump/protoreflect v1.17.0 // indirect
@@ -141,7 +136,7 @@ require (
 	github.com/spiffe/go-spiffe/v2 v2.6.0 // indirect
 	github.com/srikrsna/protoc-gen-gotag v1.0.2 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
-	github.com/viamrobotics/ice/v2 v2.3.39 // indirect
+	github.com/viamrobotics/ice/v2 v2.3.40 // indirect
 	github.com/viamrobotics/webrtc/v3 v3.99.16 // indirect
 	github.com/viamrobotics/zeroconf v1.0.12 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
@@ -170,9 +165,9 @@ require (
 	go.uber.org/goleak v1.3.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
-	go.viam.com/api v0.1.475 // indirect
+	go.viam.com/api v0.1.477 // indirect
 	go.viam.com/test v1.2.4 // indirect
-	go.viam.com/utils v0.1.166 // indirect
+	go.viam.com/utils v0.1.171 // indirect
 	go4.org/unsafe/assume-no-moving-gc v0.0.0-20230525183740-e7c30c78aeb2 // indirect
 	golang.org/x/crypto v0.42.0 // indirect
 	golang.org/x/exp v0.0.0-20250911091902-df9299821621 // indirect

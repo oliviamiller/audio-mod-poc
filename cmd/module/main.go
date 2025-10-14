@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/gordonklaus/portaudio"
-	audio "github.com/oliviamiller/audioapi-poc"
+	"go.viam.com/rdk/components/audioin"
 	"go.viam.com/rdk/module"
 	"go.viam.com/rdk/resource"
 )
@@ -59,5 +59,5 @@ func main() {
 	portaudio.Terminate()
 
 	// ModularMain can take multiple APIModel arguments, if your module implements multiple models.
-	module.ModularMain(resource.APIModel{audio.API, audiomodpoc.Audioin})
+	module.ModularMain(resource.APIModel{audioin.API, audiomodpoc.Audioin})
 }

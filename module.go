@@ -13,9 +13,8 @@ import (
 
 	"github.com/braheezy/shine-mp3/pkg/mp3"
 
-	audioapi "github.com/oliviamiller/audioapi-poc"
-
 	"github.com/gordonklaus/portaudio"
+	"go.viam.com/rdk/components/audioin"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
 
@@ -25,14 +24,14 @@ import (
 )
 
 var (
-	Audioin          = resource.NewModel("olivia", "audio", "audioin")
+	Audioin          = resource.NewModel("olivia", "audioin", "microphone")
 	errUnimplemented = errors.New("unimplemented")
 )
 
 func init() {
 	// Register the component using the API from your audioapi-poc
-	resource.RegisterComponent(audioapi.API, Audioin,
-		resource.Registration[audioapi.Audio, *Config]{
+	resource.RegisterComponent(audioin.API, Audioin,
+		resource.Registration[audioin.AudioIn, *Config]{
 			Constructor: newAudioModPocAudioin,
 		},
 	)
@@ -64,7 +63,7 @@ type audioModPocAudioin struct {
 	cancelFunc    func()
 }
 
-func newAudioModPocAudioin(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (audioapi.Audio, error) {
+func newAudioModPocAudioin(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (audioin.AudioIn, error) {
 	conf, err := resource.NativeConfig[*Config](rawConf)
 	if err != nil {
 		return nil, err
@@ -73,10 +72,10 @@ func newAudioModPocAudioin(ctx context.Context, deps resource.Dependencies, rawC
 	return NewAudioin(ctx, deps, rawConf.ResourceName(), conf, logger)
 }
 
-func NewAudioin(ctx context.Context, deps resource.Dependencies, name resource.Name, conf *Config, logger logging.Logger) (audioapi.Audio, error) {
+func NewAudioin(ctx context.Context, deps resource.Dependencies, name resource.Name, conf *Config, logger logging.Logger) (audioin.AudioIn, error) {
 	cancelCtx, cancelFunc := context.WithCancel(context.Background())
 
-	audioCapturer := NewAudioCapturer(audioapi.Pcm32Float) // Default format
+	audioCapturer := NewAudioCapturer("pcm32_float") // Default format
 
 	// Initialize PortAudio
 	if err := portaudio.Initialize(); err != nil {
@@ -116,23 +115,22 @@ func (s *audioModPocAudioin) Name() resource.Name {
 type AudioCapturer struct {
 	stream     *portaudio.Stream
 	buffer     interface{} // Can be []int16, []float32, or []int32
-	format     audioapi.AudioFormat
+	format     string
 	sequence   int32
 	isRunning  bool
 	mp3Encoder *mp3.Encoder // MP3 encoder for persistent encoding
 }
 
 // NewAudioCapturer creates a new audio capturer
-func NewAudioCapturer(format audioapi.AudioFormat) *AudioCapturer {
+func NewAudioCapturer(format string) *AudioCapturer {
 	return &AudioCapturer{
 		format: format,
 	}
 }
 
 // StartCapture initializes audio capture and returns a channel of audio chunks
-func (ac *AudioCapturer) StartCapture(ctx context.Context, format audioapi.AudioFormat, sampleRate int, channels int) (<-chan *audioapi.AudioChunk, error) {
+func (ac *AudioCapturer) StartCapture(ctx context.Context, codec string, sampleRate int, channels int) (chan *audioin.AudioChunk, error) {
 
-	startTime := time.Now().UnixMilli()
 	defaultInput, err := portaudio.DefaultInputDevice()
 	if err != nil {
 		fmt.Printf("Error getting default input device: %v\n", err)
@@ -145,15 +143,20 @@ func (ac *AudioCapturer) StartCapture(ctx context.Context, format audioapi.Audio
 	const framesPerBuffer = 512
 
 	// Buffer to hold audio samples based on format
-	switch format {
-	case audioapi.Pcm16, audioapi.Mp3:
+	var bufferLen int
+	switch codec {
+	case "pcm16", "mp3":
 		ac.buffer = make([]int16, framesPerBuffer*channels)
-	case audioapi.Pcm32:
+		bufferLen = len(ac.buffer.([]int16))
+	case "pcm32":
 		ac.buffer = make([]int32, framesPerBuffer*channels)
-	case audioapi.Pcm32Float:
+		bufferLen = len(ac.buffer.([]int32))
+	case "pcm32_float":
 		ac.buffer = make([]float32, framesPerBuffer*channels)
+		bufferLen = len(ac.buffer.([]float32))
 	default:
 		ac.buffer = make([]float32, framesPerBuffer*channels) // Default to float32
+		bufferLen = len(ac.buffer.([]float32))
 	}
 
 	dev, err := portaudio.DefaultInputDevice()
@@ -173,23 +176,8 @@ func (ac *AudioCapturer) StartCapture(ctx context.Context, format audioapi.Audio
 		FramesPerBuffer: framesPerBuffer,
 	}
 
-	// Get buffer length based on type
-	var bufferLen int
-	switch format {
-	case audioapi.Pcm16:
-		bufferLen = len(ac.buffer.([]int16))
-	case audioapi.Pcm32:
-		bufferLen = len(ac.buffer.([]int32))
-	case audioapi.Pcm32Float:
-		bufferLen = len(ac.buffer.([]float32))
-	case audioapi.Mp3:
-		bufferLen = len(ac.buffer.([]int16))
-	default:
-		bufferLen = len(ac.buffer.([]float32))
-	}
-
 	// Initialize MP3 encoder if needed
-	if format == audioapi.Mp3 {
+	if codec == "mp3" {
 		ac.mp3Encoder = mp3.NewEncoder(sampleRate, channels)
 		fmt.Printf("Initialized MP3 encoder for %d Hz, %d channels\n", sampleRate, channels)
 	}
@@ -217,21 +205,16 @@ func (ac *AudioCapturer) StartCapture(ctx context.Context, format audioapi.Audio
 	ac.isRunning = true
 
 	// Create channels for audio chunks and errors
-	chunkChan := make(chan *audioapi.AudioChunk, 10) // Buffer for smoother streaming
-
-	endTime := time.Now().UnixMilli()
-
-	fmt.Println("TIME")
-	fmt.Println(endTime - startTime)
+	chunkChan := make(chan *audioin.AudioChunk, 10) // Buffer for smoother streaming
 
 	// Start goroutine to capture audio
-	go ac.captureLoop(ctx, chunkChan, format, sampleRate, channels)
+	go ac.captureLoop(ctx, chunkChan, codec, sampleRate, channels)
 
 	return chunkChan, nil
 }
 
 // captureLoop runs the audio capture loop
-func (ac *AudioCapturer) captureLoop(ctx context.Context, chunkChan chan<- *audioapi.AudioChunk, format audioapi.AudioFormat, sampleRate int, channels int) {
+func (ac *AudioCapturer) captureLoop(ctx context.Context, chunkChan chan *audioin.AudioChunk, codec string, sampleRate int, channels int) {
 	defer func() {
 		close(chunkChan)
 		ac.Stop()
@@ -240,7 +223,6 @@ func (ac *AudioCapturer) captureLoop(ctx context.Context, chunkChan chan<- *audi
 	for ac.isRunning {
 		select {
 		case <-ctx.Done():
-			fmt.Println("context done, returning")
 			return
 		default:
 		}
@@ -252,24 +234,14 @@ func (ac *AudioCapturer) captureLoop(ctx context.Context, chunkChan chan<- *audi
 				fmt.Println("Audio input overflow, skipping buffer...")
 				continue // Skip this buffer and continue capturing
 			}
-
-			// Create audio chunk
-			chunk := &audioapi.AudioChunk{
-				Err: fmt.Errorf("failed to read stream: %w", err),
-			}
-			// Send chunk to channel
-			select {
-			case chunkChan <- chunk:
-			case <-ctx.Done():
-				fmt.Println("context is done")
-				return
-			}
+			fmt.Printf("error reading stream: %w\ns", err)
 			return
+
 		}
 
 		var pcmData []byte
-		switch format {
-		case audioapi.Pcm16:
+		switch codec {
+		case "pcm16":
 			buffer := ac.buffer.([]int16)
 			buf := new(bytes.Buffer)
 
@@ -282,7 +254,7 @@ func (ac *AudioCapturer) captureLoop(ctx context.Context, chunkChan chan<- *audi
 				}
 			}
 			pcmData = buf.Bytes()
-		case audioapi.Pcm32:
+		case "pcm32":
 			buffer := ac.buffer.([]int32)
 			buf := new(bytes.Buffer)
 
@@ -295,7 +267,7 @@ func (ac *AudioCapturer) captureLoop(ctx context.Context, chunkChan chan<- *audi
 				}
 			}
 			pcmData = buf.Bytes()
-		case audioapi.Pcm32Float:
+		case "pcm32_float":
 			buffer := ac.buffer.([]float32)
 			buf := new(bytes.Buffer)
 
@@ -308,7 +280,7 @@ func (ac *AudioCapturer) captureLoop(ctx context.Context, chunkChan chan<- *audi
 				}
 			}
 			pcmData = buf.Bytes()
-		case audioapi.Mp3:
+		case "mp3":
 			// Create buffer for MP3 output
 			var mp3Buffer bytes.Buffer
 
@@ -343,9 +315,9 @@ func (ac *AudioCapturer) captureLoop(ctx context.Context, chunkChan chan<- *audi
 		}
 
 		// Create audio chunk
-		chunk := &audioapi.AudioChunk{
+		chunk := &audioin.AudioChunk{
 			AudioData: pcmData,
-			Sequence:  int64(ac.sequence),
+			Sequence:  int32(ac.sequence),
 		}
 
 		ac.sequence++
@@ -354,7 +326,6 @@ func (ac *AudioCapturer) captureLoop(ctx context.Context, chunkChan chan<- *audi
 		select {
 		case chunkChan <- chunk:
 		case <-ctx.Done():
-			fmt.Println("context is done")
 			return
 		}
 	}
@@ -376,7 +347,7 @@ func (ac *AudioCapturer) Stop() {
 
 }
 
-func (s *audioModPocAudioin) GetAudio(ctx context.Context, codec string, durationSeconds float32, maxDuration float32, previousTimeStamp int64) (<-chan *audioapi.AudioChunk, error) {
+func (s *audioModPocAudioin) GetAudio(ctx context.Context, codec string, durationSeconds float32, previousTimeStamp int64, extra map[string]interface{}) (chan *audioin.AudioChunk, error) {
 	s.logger.Infof("Starting audio recording for %d seconds", durationSeconds)
 
 	var captureCtx context.Context
@@ -385,7 +356,7 @@ func (s *audioModPocAudioin) GetAudio(ctx context.Context, codec string, duratio
 		captureCtx, _ = context.WithTimeout(ctx, time.Duration(durationSeconds)*time.Second)
 	}
 	// hardcorded for now. need to add these params to the config
-	audio, err := s.audioCapturer.StartCapture(captureCtx, audioapi.Pcm16, 48000, 1)
+	audio, err := s.audioCapturer.StartCapture(captureCtx, "pcm16", 48000, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -620,8 +591,8 @@ func (s *audioModPocAudioin) Play(ctx context.Context, audio []byte, codec strin
 	return nil
 }
 
-func (s *audioModPocAudioin) Properties(ctx context.Context) (audioapi.Properties, error) {
-	return audioapi.Properties{}, nil
+func (s *audioModPocAudioin) Properties(ctx context.Context, extra map[string]interface{}) (audioin.Properties, error) {
+	return audioin.Properties{}, nil
 }
 
 func (s *audioModPocAudioin) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
